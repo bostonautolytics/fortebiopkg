@@ -1,5 +1,7 @@
 import datafitting
 import numpy as np
+import scipy
+from scipy.signal import savgol_filter
 
 def __init__(self):
     """ No parameters required """
@@ -68,6 +70,15 @@ def removeblanksensors(experiment, sensor_name='all', sensor_info=False, concent
     return experiment
 
 
+def removesensors(experiment, sensorlist):
+    newexp = []
+    for i in range(len(experiment)):
+        if experiment[i]['sensor'] not in sensorlist:
+            newexp.append(experiment[i])
+    experiment = newexp
+    return experiment
+
+
 def blankstepsubtraction(experiment, stepnumberofblank=0, stepnumberofassociation=1, step2correct='all'):
     for exp in experiment:
         xdata = exp['x_data']
@@ -93,15 +104,15 @@ def blankstepsubtraction(experiment, stepnumberofblank=0, stepnumberofassociatio
                         for k in range(0, len(xdata[j])):
                             ydata[j][k] += (slopeA * xdata[j][k]) + yinterceptA
         #### Check to make sure re-correction was sufficient ####
-        slopeA, yinterceptA = datafitting.linearfit(xdata[stepnumberofassociation],
-                                                    ydata[stepnumberofassociation], True)
-        slopeB, yinterceptB = datafitting.linearfit(xdata[stepnumberofassociation+1],
-                                                    ydata[stepnumberofassociation+1], True)
-        if slopeA > 0 and slopeB > 0 :
-            exp['comments'].append('Sensogram is not self-background subtracted, reference subtraction required')
+        dissocdelta = ydata[stepnumberofassociation+1][int(len(ydata[stepnumberofassociation+1]) *
+                                                         0.67)]-ydata[stepnumberofassociation+1][-1]
+        if dissocdelta > 0 and \
+                np.abs(dissocdelta) > (0.05 * np.abs(ydata[stepnumberofassociation][-1] - ydata[stepnumberofassociation][0])):
+            exp['flags'].append('Sensogram is not self-background subtracted! Reference subtraction required')
         else:
             exp['x_data'] = xdata
             exp['y_data'] = ydata
+            exp['flags'].append('Sensogram is self-background subtracted')
     return experiment
 
 
@@ -261,6 +272,8 @@ def splitsequentialbysteptype(experiment, sequence):
             ActualTime = []
             StepStatus = []
             StepType = []
+            StepLoc = []
+            SampleGroup = []
             Concentration = []
             MolarConcentration = []
             SampleID = []
@@ -270,8 +283,10 @@ def splitsequentialbysteptype(experiment, sequence):
             Com = []
             Flags = []
             FXN = []
+            ParamError = []
             FitParam = []
             ParamName = []
+
             for k in range(len(sequence)):
                 if experiment[i]['sensor'] is not None:
                     SensorName = experiment[i]['sensor']
@@ -293,6 +308,10 @@ def splitsequentialbysteptype(experiment, sequence):
                     StepStatus.append(experiment[i]['step_status'][indexcontrol[i][k + (j * seqlen)]])
                 if experiment[i]['step_type'] is not None:
                     StepType.append(experiment[i]['step_type'][indexcontrol[i][k + (j * seqlen)]])
+                if experiment[i]['step_loc'] is not None:
+                    StepLoc.append(experiment[i]['step_loc'][indexcontrol[i][k + (j * seqlen)]])
+                if experiment[i]['sample_group'] is not None:
+                    SampleGroup.append(experiment[i]['sample_group'][indexcontrol[i][k + (j * seqlen)]])
                 if experiment[i]['concentration'] is not None:
                     Concentration.append(experiment[i]['concentration'][indexcontrol[i][k + (j * seqlen)]])
                 if experiment[i]['molarconcentration'] is not None:
@@ -318,6 +337,10 @@ def splitsequentialbysteptype(experiment, sequence):
                 except:
                     FXN = []
                 try:
+                    ParamError = experiment[i]['param_error'][indexcontrol[i][k + (j * seqlen)]]
+                except:
+                    ParamError = []
+                try:
                     FitParam = experiment[i]['fit_param'][indexcontrol[i][k + (j * seqlen)]]
                 except:
                     FitParam = []
@@ -329,8 +352,29 @@ def splitsequentialbysteptype(experiment, sequence):
             new_experiment.append({'sensor': SensorName, 'sensor_role': SensorRole, 'sensor_type': SensorType,
                 'sensor_info': SensorInfo, 'x_data': Xdata, 'y_data': Ydata, 'step_name': StepName,
                 'actual_time': ActualTime, 'step_status': StepStatus, 'step_type': StepType,
+                'step_loc': StepLoc, 'sample_group': SampleGroup,
                 'concentration': Concentration, 'molarconcentration': MolarConcentration,
                 'sampleid': SampleID, 'welltype': WellType, 'molecularweight': MW, 'signal2noise': SN,
-                'comments': Com, 'flags': Flags, 'fit_fxn': FXN, 'fit_param': FitParam, 'param_name': ParamName})
-
+                'comments': Com, 'flags': Flags, 'fit_fxn': FXN, 'param_error': ParamError,
+                'fit_param': FitParam, 'param_name': ParamName})
     return new_experiment
+
+
+def sgfilter(experiment, window_length=5, polyorder=3, deriv=0, delta=1.0, axis=-1, mode='interp', cval=0.0):
+    for exp in experiment:
+        ydata = exp['y_data']
+        j = 0
+        while j < len(ydata):
+            ydata[j] = scipy.signal.savgol_filter(ydata[j], window_length, polyorder, deriv, delta, axis, mode, cval)
+            j = j + 1
+    return experiment
+
+
+def clearcomments(experiment):
+    for exp in experiment:
+        exp['comments'] = []
+
+
+def clearflags(experiment):
+    for exp in experiment:
+        exp['flags'] = []
