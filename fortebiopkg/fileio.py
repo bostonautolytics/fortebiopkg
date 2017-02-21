@@ -311,69 +311,184 @@ def exportallxy(experiment, outfile, overwrite=True, onefilepersensor=False, *ar
     return True
 
 
-def xlsxmodelreportnew(experiment, outfile):
+def xlsxmodelreportAtlas(experiment, outfile, *args, **kwargs):
+    offrange = None
+    onrange = None
+    figures = False
+    xlsout = False
+    rsq = "full"
+    xlabel = "Time (sec)"
+    ylabel = "Response (nm)"
+
+    if 'off_xrange' in kwargs.keys():
+        offrange = kwargs['off_xrange']
+    if 'on_xrange' in kwargs.keys():
+        onrange = kwargs['on_xrange']
+    if 'r_sq' in kwargs.keys():
+        rsq = kwargs['r_sq']
+    if 'figures' in kwargs.keys():
+        figures = kwargs['figures']
+    if 'xlabel' in kwargs.keys():
+        xlabel = kwargs['xlabel']
+    if 'ylabel' in kwargs.keys():
+        ylabel = kwargs['ylabel']
+
     outpath, outfile, fileext = filewritecheck(experiment, outfile)
     if not outpath:
         return
-    outfile = 'fit'
-    fileext = '.xlsx'
+    if fileext == '.xls':
+        fileext = '.xlsx'
+        xlsout = True
+    elif fileext == '.xlsx':
+        xlsout = False
     filename = os.path.join(outpath, outfile + fileext)
     wb = XL.Workbook(filename)
     ws = wb.add_worksheet("Result Table")
-    ws.set_column(2, 2, 32)
+    ws.set_column(33, 33, 32)
     ws.set_row(0, 30)
-    ws.write(0, 0, 'flags')
-    ws.write(0, 1, 'comments')
-    ws.write(0, 2, 'Plot Data and Model')
-    ws.write(0, 3, 'Sensor')
-    ws.write(0, 4, 'SampleID')
-    ws.write(0, 5, 'Peptide')
-    ws.write(0, 6, 'KD')
-    ws.write(0, 7, 'Req')
-    ws.write(0, 8, 'avg Rsq (ka)')
-    ws.write(0, 9, 'signal to noise')
-    ws.write(0, 10, 'Amplitude')
-    for i in range(len(experiment[0]['param_name'])):
-        ws.write(0, i+11, str(experiment[0]['param_name'][i]))
-    ws.freeze_panes(1, 0)
+    ws.write(0, 0, 'Selected')
+    ws.write(0, 1, 'Include')
+    ws.write(0, 2, 'Index')
+    ws.write(0, 3, 'Color')
+    ws.write(0, 4, 'Sensor Location')
+    ws.write(0, 5, 'Sensor Type')
+    ws.write(0, 6, 'Sensor Info')
+    ws.write(0, 7, 'Replicate Group')
+    ws.write(0, 8, 'Baseline Loc.')
+    ws.write(0, 9, 'Assoc. (Sample) Loc.')
+    ws.write(0, 10, 'Sample ID')
+    ws.write(0, 11, 'Dissoc. Loc.')
+    ws.write(0, 12, 'Loading Well Location')
+    ws.write(0, 13, 'Loading Sample ID')
+    ws.write(0, 14, 'Cycle')
+    ws.write(0, 15, 'Conc. (nM)')
+    ws.write(0, 16, 'Response')
+    ws.write(0, 17, 'KD (M)')
+    ws.write(0, 18, 'KD Error')
+    ws.write(0, 19, 'kon(1/Ms)')
+    ws.write(0, 20, 'kon Error')
+    ws.write(0, 21, 'kdis(1/s)')
+    ws.write(0, 22, 'kdis Error')
+    ws.write(0, 23, 'Rmax')
+    ws.write(0, 24, 'Rmax Error')
+    ws.write(0, 25, 'kobs(1/s)')
+    ws.write(0, 26, 'Req')
+    ws.write(0, 27, 'Req/Rmax(%)')
+    if rsq == "on":
+        ws.write(0, 28, 'Assoc X^2')
+        ws.write(0, 29, 'Assoc R^2')
+    elif rsq == "off":
+        ws.write(0, 28, 'Dissoc X^2')
+        ws.write(0, 29, 'Dissoc R^2')
+    else:
+        ws.write(0, 28, 'Full X^2')
+        ws.write(0, 29, 'Full R^2')
+    ws.write(0, 30, 'SSG KD')
+    ws.write(0, 31, 'SSG Rmax')
+    ws.write(0, 32, 'SSG R^2')
 
+    ws.freeze_panes(1, 0)
+    skipped = 0
     for i in range(len(experiment)):
         if experiment[i]['sensor_info'] is None:
+            skipped = skipped + 1
             continue
         if str(experiment[i]['step_status'])[0].upper() == "ERROR":
             ws.write(i + 1, 1, "Sensor Error")
             continue
-        figure = BIO(datafitting.saveplot(experiment[i], None, 1, True))
-        ws.set_row(i+1, 132)
-        ws.write(i + 1, 0, str(experiment[i]['flags']))
-        ws.write(i + 1, 1, str(experiment[i]['comments']))
-        ws.insert_image(i + 1, 2, 'figure.png', {'image_data': figure, 'x_scale': 0.3, 'y_scale': 0.3})
-        ws.write(i + 1, 3, experiment[i]['sensor'])
-        ws.write(i + 1, 4, experiment[i]['sampleid'][1])
-        ws.write(i + 1, 5, '')
-        eqkdtemp = float(experiment[i]['fit_param'][1])/float(experiment[i]['fit_param'][2])
-        ws.write(i + 1, 6, eqkdtemp)
+        ws.write(i - skipped + 1, 0, str('x'))
+        ws.write(i - skipped + 1, 1, str('x'))
+        ws.write(i - skipped + 1, 2, int(i - skipped))
+        ws.write(i - skipped + 1, 3, str('0'))
+        ws.write(i - skipped + 1, 4, str(experiment[i]['sensor']))
+        ws.write(i - skipped + 1, 5, str(experiment[i]['sensor_type']))
+        ws.write(i - skipped + 1, 6, str(experiment[i]['sensor_info']))
+        ws.write(i - skipped + 1, 7, str(experiment[i]['sample_group'][1]))
+        for w in range(len(experiment[i]['step_type'])):
+            if experiment[i]['step_type'][w] == 'BASELINE':
+                ws.write(i - skipped + 1, 8, str(experiment[i]['step_loc'][w]))
+            elif experiment[i]['step_type'][w] == 'ASSOC':
+                ws.write(i - skipped + 1, 9, str(experiment[i]['step_loc'][w]))
+                rawy = np.array(np.array(experiment[i]['y_data'][w]))
+            elif experiment[i]['step_type'][w] == 'DISASSOC':
+                ws.write(i - skipped + 1, 11, str(experiment[i]['step_loc'][w]))
+                rawyoff = np.array(np.array(experiment[i]['y_data'][w]))
+            elif experiment[i]['step_type'][w] == 'LOADING':
+                ws.write(i - skipped + 1, 12, str(experiment[i]['step_loc'][w]))
+                ws.write(i - skipped + 1, 13, str(experiment[i]['sampleid'][w]))
+
+        if rsq == "full" or "on":
+            rawyon = rawy
+            modelon = datafitting.analytical1to1modelon(np.array(experiment[i]['x_data'][1]),
+                                                        experiment[i]['fit_param'])
+            rsqtempon = np.sum(np.power(modelon - rawyon, 2))
+            rawyon = np.sum(np.power(rawyon - np.average(rawyon), 2))
+            if rsq == "on":
+                rsqreport = rsqtempon
+                rawyreport = rawyon
+        if rsq == "full" or "off":
+            modeloff = datafitting.analytical1to1modeloff(np.array(experiment[i]['x_data'][2]),
+                                                          experiment[i]['fit_param'])
+            rsqtempoff = np.sum(np.power(modeloff - rawyoff, 2))
+            rawyoff = np.sum(np.power(rawyoff - np.average(rawyoff), 2))
+            if rsq == "off":
+                rsqreport = rsqtempoff
+                rawyreport = rawyoff
+            else:
+                rsqreport = (rsqtempoff + rsqtempon) / 2
+                rawyreport = (rawyoff + rawyon) / 2
+
+        ws.write(i - skipped + 1, 10, experiment[i]['sampleid'][1])
+        ws.write(i - skipped + 1, 14, str(experiment[i]['flags']))
+        ws.write(i - skipped + 1, 15, float(experiment[i]['molarconcentration'][1]))
+        ws.write(i - skipped + 1, 16, float("{0:.3f}".format(np.max(rawy) - np.min(rawy))))
+        # Rmax, kd, ka, Cpro, m, c, X0, kds
+        eqkdtemp = float(experiment[i]['fit_param'][1]) / float(experiment[i]['fit_param'][2])
         ctemp = float(experiment[i]['fit_param'][3])
         rmtemp = float(experiment[i]['fit_param'][0])
-        ws.write(i + 1, 7, (ctemp/(ctemp+eqkdtemp)*rmtemp))
-        model = datafitting.analytical1to1modelon(np.array(experiment[i]['x_data'][1]), experiment[i]['fit_param'])
-        rawy = np.array(np.array(experiment[i]['y_data'][1]))
-        rsqtemp = np.sum(np.power(model - rawy, 2))
-        rawy = np.sum(np.power(rawy - np.average(rawy), 2))
-        ws.write(i + 1, 8, (1 - (rsqtemp/rawy)))
-        ws.write(i + 1, 9, experiment[i]['signal2noise'])
-        ws.write(i + 1, 10, experiment[i]['y_data'][1][-1] - experiment[i]['y_data'][1][0])
-        for j in range(len(experiment[i]['fit_param'])):
-            ws.write(i+1, j+11, experiment[i]['fit_param'][j])
+        reqtemp = (ctemp / (ctemp + eqkdtemp) * rmtemp)
+        ws.write(i - skipped + 1, 17, eqkdtemp)
+        ws.write(i - skipped + 1, 18,
+                 ((float(experiment[i]['param_error'][1]) / float(experiment[i]['fit_param'][1])) ** 2 +
+                  (float(experiment[i]['param_error'][2]) / float(experiment[i]['fit_param'][2])) ** 2)) ** 0.5
+        ws.write(i - skipped + 1, 19, float(experiment[i]['fit_param'][2]))
+        ws.write(i - skipped + 1, 20, float(experiment[i]['param_error'][2]))
+        ws.write(i - skipped + 1, 21, float(experiment[i]['fit_param'][1]))
+        ws.write(i - skipped + 1, 22, float(experiment[i]['param_error'][1]))
+        ws.write(i - skipped + 1, 23, rmtemp)
+        # ws.write(i - skipped + 1, 23, (float(experiment[i]['fit_param'][2]) *
+        #           (float(experiment[i]['molarconcentration'][1]) / 1E9)) + float(experiment[i]['fit_param'][1]))
+        ws.write(i - skipped + 1, 24, np.sqrt(float(experiment[i]['param_error'][2]) *
+                                              (float(experiment[i]['molarconcentration'][1]) / 1E9) ** 2 + float(
+            experiment[i]['param_error'][1]) ** 2))
+        ws.write(i - skipped + 1, 25, reqtemp)
+        ws.write(i - skipped + 1, 26, (np.sqrt((float(experiment[i]['param_error'][1]) /
+                                                float(experiment[i]['fit_param'][1])) ** 2 +
+                                               (float(experiment[i]['param_error'][2]) / float(
+                                                   experiment[i]['fit_param'][2])) ** 2 +
+                                               (float(experiment[i]['param_error'][0]) / float(
+                                                   experiment[i]['fit_param'][0])) ** 2)) / ctemp)
+        ws.write(i - skipped + 1, 27, 100 * reqtemp / rmtemp)
+        ws.write(i - skipped + 1, 28, str(datafitting.calcxsq(rawyon, modelon)))  # association chi sq
+        ws.write(i - skipped + 1, 29, (1 - (rsqreport / rawyreport)))
+        ws.write(i - skipped + 1, 30, str(''))
+        ws.write(i - skipped + 1, 31, str(''))
+        ws.write(i - skipped + 1, 32, str(''))
+        if figures:
+            pngfigure = BIO(datafitting.saveplot(experiment[i], None, 1, True, on_xrange=onrange, off_xrange=offrange,
+                                                 xlabel=xlabel, ylabel=ylabel))
+            ws.set_row(i - skipped + 1, 132)
+            ws.insert_image(i - skipped + 1, 33, 'figure.png', {'image_data': pngfigure,
+                                                                'x_scale': 0.3, 'y_scale': 0.3})
     wb.close()
-    for i in range(len(experiment)):
-        if str(experiment[i]['step_status'])[0].upper() == "ERROR" or experiment[i]['sensor_info'] is None:
-            ws.write(i + 1, 1, "Sensor Error")
-            continue
+    if xlsout:
+        convertxlsx2xls(filename)
+        if not figures:
+            os.remove(filename)
     return
 
 
-def xlsmodelreport(experiment, outfile, *args, **kwargs):
+def xlsxmodelreport(experiment, outfile, *args, **kwargs):
     offrange = None
     onrange = None
     figures = False

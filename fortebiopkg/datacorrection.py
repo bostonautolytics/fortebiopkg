@@ -79,6 +79,28 @@ def removesensors(experiment, sensorlist):
     return experiment
 
 
+def trimstepdata(experiment, stepnumber, starttime, stoptime):
+    for exp in experiment:
+        xdata = exp['x_data'][stepnumber]
+        ydata = exp['y_data'][stepnumber]
+        startindex = 0
+        stopindex = len(xdata)
+        for k in range(0, len(xdata)):
+            if xdata[k] <= starttime:
+                startindex = k
+            if xdata[k] <= stoptime:
+                stopindex = k
+        exp['x_data'][stepnumber] = xdata[startindex:stopindex]
+        exp['y_data'][stepnumber] = ydata[startindex:stopindex]
+        if stepnumber != 0:
+            deltax = exp['x_data'][stepnumber][0] - exp['x_data'][stepnumber-1][-1]
+            deltay = exp['y_data'][stepnumber][0] - exp['y_data'][stepnumber-1][-1]
+            for k in range(0, len(exp['x_data'][stepnumber])):
+                exp['x_data'][stepnumber][k] -= deltax
+                exp['y_data'][stepnumber][k] -= deltay
+    return experiment
+
+
 def blankstepsubtraction(experiment, stepnumberofblank=0, stepnumberofassociation=1, step2correct='all'):
     for exp in experiment:
         xdata = exp['x_data']
@@ -87,28 +109,30 @@ def blankstepsubtraction(experiment, stepnumberofblank=0, stepnumberofassociatio
         baseliney = ydata[stepnumberofblank]
         #### get linear fit of last 30% of baseline ####
         slope, yintercept = datafitting.linearfit(baselinex, baseliney, True)
+        if int(slope) == 0 and int(yintercept) == 0:
+            exp['flags'].append('Sensogram is self-background subtracted')
+            continue
         #### Correct data steps with linear model ####
         for j in range(0, len(xdata)):
             if j == step2correct or step2correct == 'all':###correct all data
                 for k in range(0, len(xdata[j])):
                     ydata[j][k] -= (slope * xdata[j][k]) + yintercept
-        if step2correct == stepnumberofassociation or step2correct == 'all': ##if association phase was corrected, check
-            #### Check association slope (last 30%) is not negative #####
-            slopeA, yinterceptA = datafitting.linearfit(xdata[stepnumberofassociation],
-                                  ydata[stepnumberofassociation], True)
-            if slopeA < 0: ###if negative slope correct to 0
-                slopeA = slopeA * -1
-                yinterceptA = ydata[j][1] - (slopeA * xdata[j][1])
-                for j in range(0, len(xdata)):
-                    if j == step2correct or step2correct == 'all':  ###correct all data
-                        for k in range(0, len(xdata[j])):
-                            ydata[j][k] += (slopeA * xdata[j][k]) + yinterceptA
+        #### Check association slope (last 30%) is not negative #####
+        slopeA, yinterceptA = datafitting.linearfit(xdata[stepnumberofassociation],
+                                ydata[stepnumberofassociation], True)
+        if slopeA < 0:  ###if negative slope correct to 0
+            slopeA = slopeA * -1
+            yinterceptA = ydata[j][1] - (slopeA * xdata[j][1])
+            for j in range(0, len(xdata)):
+                if j == step2correct or step2correct == 'all':  ###correct all data
+                    for k in range(0, len(xdata[j])):
+                        ydata[j][k] += (slopeA * xdata[j][k]) + yinterceptA
         #### Check to make sure re-correction was sufficient ####
-        dissocdelta = ydata[stepnumberofassociation+1][int(len(ydata[stepnumberofassociation+1]) *
-                                                         0.67)]-ydata[stepnumberofassociation+1][-1]
-        if dissocdelta > 0 and \
-                np.abs(dissocdelta) > (0.05 * np.abs(ydata[stepnumberofassociation][-1] - ydata[stepnumberofassociation][0])):
+        slopeD, yinterceptD = datafitting.linearfit(xdata[stepnumberofassociation],
+                                                    ydata[stepnumberofassociation], True)
+        if (slopeD > 0):
             exp['flags'].append('Sensogram is not self-background subtracted! Reference subtraction required')
+            continue
         else:
             exp['x_data'] = xdata
             exp['y_data'] = ydata
@@ -159,9 +183,16 @@ def normalizetoassociation (experiment, associationstepnumber=1):
     for exp in experiment:
         maxval = exp['y_data'][associationstepnumber][-1]
         minval = exp['y_data'][associationstepnumber][0]
+        if minval >= maxval:
+            temp = maxval
+            maxval = minval
+            minval = temp
         for step in exp['y_data']:
             for i in range(len(step)):
-                step[i] = (step[i] - minval)/(maxval - minval)
+                if maxval-minval == 0:
+                    step[i] = 0
+                else:
+                    step[i] = (step[i] - minval)/(maxval - minval)
     return experiment
 
 
@@ -213,15 +244,20 @@ def setassociationtoorigin(experiment, baselinestepnumber, associationstepnumber
     return experiment
 
 
-def getsignaltonoise(experiment, baselinestepnumber=0, associationstepnumber=1):
+def getsignaltonoise(experiment, baselinestepnumber=0, associationstepnumber=1, datapointnumber=5):
     for exp in experiment:
         ydata = exp['y_data']
+        if len(ydata[baselinestepnumber]) < datapointnumber:
+            datapointnumber = len(backgroundnoise)
         backgroundnoise = ydata[baselinestepnumber]
-        backgroundnoise = backgroundnoise[(len(backgroundnoise)/5):]
+        backgroundnoise = backgroundnoise[len(backgroundnoise)-datapointnumber:]
         fullresponse = ydata[associationstepnumber]
         backgroundamplitude = max(backgroundnoise)-min(backgroundnoise)
         signalamplitude = max(fullresponse)-min(fullresponse)
-        exp['signal2noise'] = signalamplitude/backgroundamplitude
+        if signalamplitude == 0 or backgroundamplitude == 0:
+            exp['signal2noise'] = 0
+        else:
+            exp['signal2noise'] = signalamplitude/backgroundamplitude
     return experiment
 
 
@@ -360,7 +396,7 @@ def splitsequentialbysteptype(experiment, sequence):
     return new_experiment
 
 
-def sgfilter(experiment, window_length=5, polyorder=3, deriv=0, delta=1.0, axis=-1, mode='interp', cval=0.0):
+def sgfilter(experiment, window_length=31, polyorder=5, deriv=0, delta=1.0, axis=-1, mode='interp', cval=0.0):
     for exp in experiment:
         ydata = exp['y_data']
         j = 0

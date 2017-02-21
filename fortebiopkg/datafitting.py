@@ -5,6 +5,7 @@ import matplotlib.pyplot as pl
 import os
 import warnings
 from io import BytesIO as BIO
+from scipy import stats
 
 
 def __init__(self):
@@ -13,40 +14,27 @@ def __init__(self):
 
 
 def linearfit(baselinex, baseliney, onlylast20percent=False):
-    yintercept = 0
-    sumxy = 0
-    sumx = 0
-    sumy = 0
-    sumxsq = 0
+
     baselinex.tolist()
     baseliney.tolist()
     if onlylast20percent:
-        i = int(len(baselinex) / 5) * 2
-    else:
-        i=0
-    count = len(baselinex)
-    while i < len(baselinex):
-        if not np.isfinite(baselinex[i]) or not np.isfinite(baseliney[i]):
-            count -= 1
-            i += 1
-            continue
-        sumxy += baselinex[i] * baseliney[i]
-        sumx += baselinex[i]
-        sumy += baseliney[i]
-        sumxsq += baselinex[i] * baselinex[i]
-        i += 1
-    slope = ((count * sumxy) - (sumx * sumy)) / ((count * sumxsq) - (sumx * sumx))
-    yintercept = baseliney[1] - (slope * baselinex[1])
-    return [slope, yintercept]
+        count = int(len(baselinex))
+        baselinex = baselinex[4 * (count / 5):]
+        baseliney = baseliney[4 * (count / 5):]
+    slope, intercept, r_value, p_value, std_err = stats.linregress(baselinex, baseliney)
+    return [slope, intercept]
 
 
 def fit1to1modeldecon(experiment, associationstepnumber=1, dissociationstepnumber=2, globalfit=False, *args, **kwargs):
     forcedecon = False
     verbose = False
+    snco = -1
     if 'force_decon' in kwargs.keys():
         forcedecon = kwargs['force_decon']
     if 'verbose' in kwargs.keys():
         verbose = kwargs['verbose']
+    if 'sn_cutoff' in kwargs.keys():
+        snco = 'sn_cutoff'
 
     if not globalfit:
         np.seterr(all="ignore")
@@ -57,16 +45,15 @@ def fit1to1modeldecon(experiment, associationstepnumber=1, dissociationstepnumbe
             percentcounter = 100 * (count + 1) / totalexp
             if verbose:
                 print "\r1 to 1 model (decon) fitting progress: " + str(percentcounter) + "%",
-
             if exp['step_status'][-1].upper() is 'ERROR' or \
-                    (exp['signal2noise'] is not None and float(exp['signal2noise']) <= 2.5):
+                    (exp['signal2noise'] is not None and float(exp['signal2noise']) <= snco):
                 exp['param_name'] = ['Rmax', 'kd', 'ka', 'Cpro', 'm', 'c', 'X0', 'kds']
                 exp['fit_param'] = [1, 1, 1, 1, 0, 0, exp['x_data'][dissociationstepnumber][0], 1]
                 exp['param_error'] = [1E-12, 1E-12, 1E-12, 1E-12, 1E-12, 1E-12, 1E-12, 1E-12]
                 exp['fit_fxn'] = [0, 1]
                 if exp['step_status'][-1].upper() is 'ERROR':
                     exp['comments'].append('Data not fit: Sensor Error')
-                elif (exp['signal2noise'] is not None and float(exp['signal2noise']) <= 2.5):
+                elif (exp['signal2noise'] is not None and float(exp['signal2noise']) <= snco):
                     exp['comments'].append('Data not fit: s/n below threshold')
                 paramcheck([exp], associationstepnumber, dissociationstepnumber)
                 count += 1
@@ -83,35 +70,38 @@ def fit1to1modeldecon(experiment, associationstepnumber=1, dissociationstepnumbe
             data_y2 = np.array(templist[dissociationstepnumber])
             # Get initial parameters
             fit1to1model([exp], 1, 2, False, partial_fit=True, verbose=False)
+            if exp['fit_param'][1] > 0.8:
+                exp['fit_param'][1] = float(exp['fit_param'][1])/100
             p_partial = exp['fit_param']
             p_best_obs = exp['fit_param']
             # initial parameters: 'Rmax', 'kd', 'ka', 'Cpro', 'm', 'c', 'X0', 'kds'
-            MCO = (-0.01146 * np.exp(-1*(data_x2[-1] - data_x2[0]) / 77.5588)) + (
-                -0.07192 * np.exp(-1*(data_x2[-1] - data_x2[0]) / 10.3))
+            MCO = ((-0.01146 * np.exp(-1*(data_x2[-1] - data_x2[0]) / 77.5588)) + (
+                -0.07192 * np.exp(-1*(data_x2[-1] - data_x2[0]) / 10.3))) * (data_y1.max() - data_y1.min())
             exp['param_error'] = [1E-12, 1E-12, 1E-12, 1E-12, 1E-12, 1E-12, 1E-12, 1E-12]
+            slopeguess = linearfit(data_x2, data_y2, True)[0]
 
             if forcedecon:
                 p_fix = [None, None, None, (float(exp['molarconcentration'][associationstepnumber]) * 1E-9),
-                         MCO*1.5, None, float(data_x2[0]), 1]
+                         slopeguess, None, float(data_x2[0]), 1]
                 p_global = [data_y2.max() * 1.3, p_best_obs[1]/5, p_best_obs[2], (data_y2[0]-data_y2[-1])/2]
                 p_best, pcov, infodict, errmsg, success = scipy.optimize.leastsq(residualscalc_analytical1to1model,
                         p_global, args=(data_x1, data_y1, data_x2, data_y2, p_fix),
                             full_output=1, epsfcn=0.0001, maxfev=20000)
                 p_fix = [None, p_best[1], None, (float(exp['molarconcentration'][associationstepnumber]) * 1E-9),
                          None, None, float(data_x2[0]), 1]
-                p_global = [data_y2.max() * 1.3, p_best[2], MCO*1.5, p_best[3]]
+                p_global = [data_y2.max() * 1.3, p_best[2], slopeguess, p_best[3]]
                 p_best, pcov, infodict, errmsg, success = scipy.optimize.leastsq(residualscalc_analytical1to1model,
                     p_global, args=(data_x1, data_y1, data_x2, data_y2, p_fix),
                     full_output=1, epsfcn=0.0001, maxfev=20000)
+                p_global = [data_y2.max() * 1.3, p_fix[1], p_best[1], p_best[2], p_best[3]]
                 p_fix = [None, None, None, (float(exp['molarconcentration'][associationstepnumber]) * 1E-9),
                          None, None, float(data_x2[0]), 1]
-                p_global = [data_y2.max() * 1.3, p_best_obs[1], p_best[1], p_best[2], p_best[3]]
                 p_best, pcov, infodict, errmsg, success = scipy.optimize.leastsq(residualscalc_analytical1to1model,
                     p_global, args=(data_x1, data_y1, data_x2, data_y2, p_fix),
                                                                              full_output=1, epsfcn=0.0001, maxfev=20000)
                 p_fix = [None, p_best[1], None, (float(exp['molarconcentration'][associationstepnumber]) * 1E-9),
                          p_best[3], p_best[4], float(data_x2[0]), None]
-                p_global = [data_y2.max() * 1.3, p_best[2], .8]
+                p_global = [data_y2.max() * 1.3, p_best[2]/2, .8]
                 p_best, pcov, infodict, errmsg, success = scipy.optimize.leastsq(residualscalc_analytical1to1model,
                     p_global, args=(data_x1, data_y1, data_x2, data_y2, p_fix),
                     full_output=1, epsfcn=0.0001, maxfev=20000)
@@ -190,31 +180,32 @@ def fit1to1modeldecon(experiment, associationstepnumber=1, dissociationstepnumbe
             if np.max(modeloff-data_y2)/(data_y2[0]-data_y1[0]) >= 0.05 or calcrsq(data_y2, modeloff) <= 0.98:
                 # fit partial + linear
                 p_fix = [None, None, None, (float(exp['molarconcentration'][associationstepnumber]) * 1E-9),
-                         MCO * 1.5, None, float(data_x2[0]), 1]
+                         slopeguess, None, float(data_x2[0]), 1]
                 p_global = [data_y2.max() * 1.3, p_best_obs[1] / 5, p_best_obs[2], (data_y2[0] - data_y2[-1]) / 2]
                 p_best, pcov, infodict, errmsg, success = scipy.optimize.leastsq(residualscalc_analytical1to1model,
                     p_global, args=(data_x1, data_y1, data_x2, data_y2, p_fix),
-                                                                             full_output=1, epsfcn=0.0001, maxfev=20000)
+                    full_output=1, epsfcn=0.0001, maxfev=20000)
                 p_fix = [None, p_best[1], None, (float(exp['molarconcentration'][associationstepnumber]) * 1E-9),
                      None, None, float(data_x2[0]), 1]
-                p_global = [data_y2.max() * 1.3, p_best[2], MCO * 1.5, p_best[3]]
+                p_global = [data_y2.max() * 1.3, p_best[2],slopeguess, p_best[3]]
                 p_best, pcov, infodict, errmsg, success = scipy.optimize.leastsq(residualscalc_analytical1to1model,
                     p_global, args=(data_x1, data_y1, data_x2, data_y2, p_fix),
                                                                              full_output=1, epsfcn=0.0001, maxfev=20000)
+                p_global = [data_y2.max() * 1.3, p_fix[1], p_best[1], p_best[2], p_best[3]]
                 p_fix = [None, None, None, (float(exp['molarconcentration'][associationstepnumber]) * 1E-9),
-                     None, None, float(data_x2[0]), 1]
-                p_global = [data_y2.max() * 1.3, p_best_obs[1], p_best[1], p_best[2], p_best[3]]
+                         None, None, float(data_x2[0]), 1]
                 p_best, pcov, infodict, errmsg, success = scipy.optimize.leastsq(residualscalc_analytical1to1model,
                     p_global, args=(data_x1, data_y1, data_x2, data_y2, p_fix),
                                                                              full_output=1, epsfcn=0.0001, maxfev=20000)
                 p_fix = [None, p_best[1], None, (float(exp['molarconcentration'][associationstepnumber]) * 1E-9),
                      p_best[3], p_best[4], float(data_x2[0]), None]
-                p_global = [data_y2.max() * 1.3, p_best[2], .8]
+                p_global = [data_y2.max() * 1.3, p_best[2]/2, .8]
                 p_best, pcov, infodict, errmsg, success = scipy.optimize.leastsq(residualscalc_analytical1to1model,
                     p_global, args=(data_x1, data_y1, data_x2, data_y2, p_fix),
                                                                              full_output=1, epsfcn=0.0001, maxfev=20000)
                 modeloff2 = analytical1to1modeloff(data_x2, assemblefitparam(p_best, p_fix).tolist())
-                if (MCO*.2) > p_fix[4] > MCO and calcrsq(data_y2, modeloff2) > calcrsq(data_y2, modeloff):
+                if (MCO*.2) > p_fix[4] * (data_y1.max() - data_y1.min()) > MCO and \
+                                calcrsq(data_y2, modeloff2) > calcrsq(data_y2, modeloff):
                     exp['fit_param'] = assemblefitparam(p_best, p_fix).tolist()
                     exp['comments'].append("Decon Fit used")
                     exp['param_error'] = np.average([calcparamerror(p_best, p_fix, data_x1, data_y1, 0, pcov),
@@ -226,7 +217,7 @@ def fit1to1modeldecon(experiment, associationstepnumber=1, dissociationstepnumbe
                         p_partial, args=(data_x1, data_y1, data_x2, data_y2, p_fix),
                         full_output=1, epsfcn=0.0001, maxfev=20000)
                     exp['fit_param'] = assemblefitparam(p_best, p_fix).tolist()
-                    if p_best[4] < MCO:
+                    if p_best[4] * (data_y1.max() - data_y1.min()) < MCO:
                         exp['flags'].append("MCO cutoff violated!")
                     exp['comments'].append("Partial Fit used")
                     exp['param_error'] = np.average([calcparamerror(p_partial, p_fix, data_x1, data_y1, 0, pcov),
@@ -272,6 +263,7 @@ def fit1to1model(experiment, associationstepnumber=1, dissociationstepnumber=2, 
     onrange = None
     partial = True
     verbose = False
+    snco = -1
     if 'off_xrange' in kwargs.keys():
         offrange = kwargs['off_xrange']
     if 'on_xrange' in kwargs.keys():
@@ -280,6 +272,8 @@ def fit1to1model(experiment, associationstepnumber=1, dissociationstepnumber=2, 
         partial = kwargs['partial_fit']
     if 'verbose' in kwargs.keys():
         verbose = kwargs['verbose']
+    if 'sn_cutoff' in kwargs.keys():
+        snco = 'sn_cutoff'
 
     if not globalfit:
         np.seterr(all="ignore")
@@ -296,14 +290,14 @@ def fit1to1model(experiment, associationstepnumber=1, dissociationstepnumber=2, 
                     print "\r1 to 1 model (parital) fitting progress: " + str(percentcounter)+"%",
 
             if exp['step_status'][-1].upper() is 'ERROR' or \
-                    (exp['signal2noise'] is not None and float(exp['signal2noise']) <= 2.5):
+                    (exp['signal2noise'] is not None and float(exp['signal2noise']) <= snco):
                 exp['param_name'] = ['Rmax', 'kd', 'ka', 'Cpro', 'm', 'c', 'X0', 'kds']
                 exp['fit_param'] = [1, 1, 1, 1, 0, 0, exp['x_data'][dissociationstepnumber][0], 1]
                 exp['param_error'] = [1E-12, 1E-12, 1E-12, 1E-12, 1E-12, 1E-12, 1E-12, 1E-12]
                 exp['fit_fxn'] = [0, 1]
                 if exp['step_status'][-1].upper() is 'ERROR':
                     exp['flags'].append('Sensor Error!')
-                elif  (exp['signal2noise'] is not None and float(exp['signal2noise']) <= 2.5):
+                elif exp['signal2noise'] is not None and float(exp['signal2noise']) <= snco:
                     exp['flags'].append('Signal to noise below 2.5-fold')
                 paramcheck([exp], associationstepnumber, dissociationstepnumber)
                 count += 1
@@ -319,6 +313,11 @@ def fit1to1model(experiment, associationstepnumber=1, dissociationstepnumber=2, 
             data_y1 = np.array(templist[associationstepnumber])
             data_y2 = np.array(templist[dissociationstepnumber])
             p_best = fitkdobs([exp], dissociationstepnumber)[0]
+            kdguess = p_best[1]
+            if math.isnan(kdguess):
+                kdguess = approxexp(data_x2, data_y2)
+            if kdguess > 0.8:
+                exp['fit_param'][1] = float(exp['fit_param'][1])/100
             # if segment fits only, data needs to be masked
             if onrange is not None and range(len(onrange)) == 2:
                 m = np.ma.masked_outside(data_x1, onrange[0], onrange[1])
@@ -330,7 +329,6 @@ def fit1to1model(experiment, associationstepnumber=1, dissociationstepnumber=2, 
                 data_y2 = data_y2[~m.mask]
             # initial parameters: Rmax, kd, ka, Cpro, m, c, X0
             exp['param_name'] = ['Rmax', 'kd', 'ka', 'Cpro', 'm', 'c', 'X0', 'kds']
-            kdguess = p_best[1]
             # fit full
             p_fix = [None, p_best[1], None, (float(exp['molarconcentration'][associationstepnumber]) * 1E-9),
                      0, 0, float(data_x2[0]), 1]
@@ -339,6 +337,9 @@ def fit1to1model(experiment, associationstepnumber=1, dissociationstepnumber=2, 
                 p_global, args=(data_x1, data_y1, data_x2, data_y2, p_fix),
                 full_output=1, epsfcn=0.0001, maxfev=20000)
             kaguess = p_best[1]
+            if math.isnan(kaguess):
+                kaguess = np.abs(2/(float(exp['molarconcentration'][associationstepnumber]) * 1E-9))*\
+                          approxexp(data_x2, data_y2)
             if partial:
                 p_global = [data_y2.max() * 1.3, kdguess, kaguess]
                 p_fix = [None, None, None, (float(exp['molarconcentration'][associationstepnumber]) * 1E-9),
@@ -405,12 +406,8 @@ def fit1to1model(experiment, associationstepnumber=1, dissociationstepnumber=2, 
     return experiment
 
 
-def approxexp(x, y, PositiveAmp=False):
-    if PositiveAmp == False:
-        return (linearfit(x, np.log(y), False)[0])* -1
-    else:
-        temp = (linearfit(np.log(x)*-1, y, False))[0]*-1
-        return temp
+def approxexp(x, y):
+    return np.abs((y[int(len(y) / 10)] - y[0]) / (x[int(len(x) / 10)] - x[0]))
 
 
 def fitkdobs(experiment, dissociationstepnumber, trylinearapproximation=True):
@@ -431,7 +428,9 @@ def fitkdobs(experiment, dissociationstepnumber, trylinearapproximation=True):
         p_best, iternum = scipy.optimize.leastsq(residualscalc,
                                                  p_1, args=(temp_x, temp_y, 3, fix))
         slope, intercept = linearfit(data_x, data_y, True)
-        MCO = (-0.01146 * np.exp((data_x[-1]-data_x[0])/77.5588)) - (0.07192 * np.exp((data_x[-1]-data_x[0])/10.3))
+        MCO = (((-0.01146 * np.exp((data_x[-1]-data_x[0])/77.5588)) - (0.07192 *
+                np.exp((data_x[-1]-data_x[0])/10.3))) * (np.array(exp['y_data'][dissociationstepnumber-1]).max() -
+                                                         np.array(exp['y_data'][dissociationstepnumber-1]).min()))
         if slope < MCO:
             trylinearapproximation = False
             exp['comments'].append("MCO cutoff violated")
@@ -479,7 +478,7 @@ def fitkdobs(experiment, dissociationstepnumber, trylinearapproximation=True):
             exponly = (kdobs(data_x, assemblefitparam(p_best2, fix2)) - data_y)
 
             if (sum(explin) <= sum(exponly)*0.9) and (1 - data_y[-1]/data_y[0] >= 0.2) and p_best1[0] > 0 and \
-                            p_best2[0] > 0 and exp['signal2noise'] is not None and exp['signal2noise'] >= 2.5:
+                            p_best2[0] > 0:
                 exp['fit_fxn'] = [2]
                 exp['fit_param'] = assemblefitparam(p_best1, fix1).tolist()
                 p_return.append(p_best1)
@@ -514,7 +513,7 @@ def fitkaobs(experiment, associationstepnumber):
                                                      p_1, args=(temp_x, temp_y, 4, fix))
         else:
             exp['param_name'] = ['Amp', 'kd', 'X0']
-            p_1 = approxexp(data_x, data_y, True)
+            p_1 = approxexp(data_x, data_y)
             fix = [fmax-fmin, None, data_x[0]]
             p_best, iternum = scipy.optimize.leastsq(residualscalc,
                                                      p_1, args=(data_x, data_y, 4, fix))
@@ -600,7 +599,7 @@ def residualscalc(p, x, y, fxn, fix): # calculate residuals to determine if the 
         # parameters: Rmax, kd, ka, Cpro, m, c, X0, kds
         penalty = 1
         if p[0] < y.max()*.7 or p[0] > y.max()*10:
-            penalty += 500
+            penalty += 5000000
         if p[1] == 0 or p[2] == 0:
             penalty += 5000000
         if p[1] <= 0 or p[1] > 1:
@@ -693,10 +692,16 @@ def plotresults(exp, stackdepth=0):
 def saveplot(exp, outfile, stackdepth=0, returnBytesIO=False, associationstep=1, dissociationstep=2, *args, **kwargs):
     offrange = None
     onrange = None
+    ylabel = "Response (nm)"
+    xlabel = "Time (sec)"
     if 'off_xrange' in kwargs.keys()and kwargs['off_xrange'] is not None:
         offrange = kwargs['off_xrange']
     if 'on_xrange' in kwargs.keys() and kwargs['on_xrange'] is not None:
         onrange = kwargs['on_xrange']
+    if 'xlabel' in kwargs.keys():
+        xlabel = kwargs['xlabel']
+    if 'ylabel' in kwargs.keys():
+        ylabel = kwargs['ylabel']
     filename = ''
     if exp == []:
         return False
@@ -716,9 +721,8 @@ def saveplot(exp, outfile, stackdepth=0, returnBytesIO=False, associationstep=1,
         filename = os.path.join(outpath, outfile + fileext)
     plot = pl.figure()
     ax = plot.add_subplot(1, 1, 1)
-    #pl.ylabel('Response (nm)', size=20)
-    pl.ylabel('Fractional Response', size=20)
-    pl.xlabel('Time (sec)', size=20)
+    pl.ylabel(ylabel, size=20)
+    pl.xlabel(xlabel, size=20)
     pl.grid()
     pl.gcf().subplots_adjust(bottom=0.15)
     pl.gcf().subplots_adjust(left=0.15)
@@ -756,7 +760,7 @@ def saveplot(exp, outfile, stackdepth=0, returnBytesIO=False, associationstep=1,
         pl.close()
         return byte_png
 
-    return
+    return False
 
 
 def assemblefitparam(p, fix):
